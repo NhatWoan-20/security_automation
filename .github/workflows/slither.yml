@@ -10,48 +10,53 @@ jobs:
   slither:
     name: Run Slither Static Analysis
     runs-on: ubuntu-latest
-    # Thêm quyền ghi để Github hiển thị lỗi trực tiếp vào Code Scanning
-    permissions:
-      contents: read
-      security-events: write 
-      
+    
     steps:
+      # 1. Lấy source code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1. Setup Node.js với cơ chế Cache (Giúp pipeline chạy nhanh hơn)
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      # 2. Cài Python 
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          node-version: '18' # Sửa theo phiên bản dự án của bạn
-          cache: 'npm'       # Cache lại node_modules
+          python-version: "3.10"
 
-      # 2. Cài đặt dependencies nhanh và chuẩn xác
+      # 3. Cài Slither & solc-select
+      - name: Install Slither
+        run: |
+          pip install slither-analyzer solc-select
+
+      # 4. Cài đặt phiên bản solc
+      - name: Install solc stable version
+        run: |
+          solc-select install 0.8.20
+          solc-select use 0.8.20
+          solc --version
+
+      # 5. Nếu dùng npm (Hardhat/Truffle)
       - name: Install dependencies
         run: |
-          if [ -f package.json ]; then npm ci; fi
+          if [ -f package.json ]; then npm install; fi
 
-      # 3. Chạy Slither bằng Action chính thức (Tự động quản lý Python & solc)
+      # 6. Chạy Slither và xuất báo cáo ra JSON
       - name: Run Slither
-        uses: crytic/slither-action@v0.4.0
-        id: slither
-        with:
-          target: '.' # Hoặc trỏ thẳng vào 'contracts/' để quét nhanh hơn
-          fail-on: 'high' # Tự động fail pipeline nếu có lỗi High severity
-          slither-args: '--exclude-dependencies' # Bỏ qua thư viện ngoài (vd: OpenZeppelin)
-          sarif: results.sarif # Xuất ra định dạng SARIF chuẩn của GitHub
+        run: |
+          slither . --json slither-report.json || true
 
-      # 4. Tải file cấu trúc lỗi lên giao diện GitHub Security
-      - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@v3
-        if: always() # Đảm bảo luôn upload báo cáo dù code có bị fail ở bước trên
-        with:
-          sarif_file: ${{ steps.slither.outputs.sarif }}
+      # 7. Fail workflow nếu có lỗi High Severity
+      - name: Fail on High Severity issues
+        run: |
+          if grep -q '"impact": "High"' slither-report.json; then
+            echo "High severity issues detected!"
+            exit 1
+          else
+            echo "No High severity issues."
+          fi
 
-      # 5. Vẫn giữ lại file raw cho mục đích tải xuống
-      - name: Upload Slither raw artifact
+      # 8. Upload báo cáo artifact để tải về xem sau
+      - name: Upload Slither Report
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: slither-results
-          path: results.sarif
+          name: slither-report
+          path: slither-report.json
